@@ -235,6 +235,7 @@
         <module>extensions-contrib/druid-deltalake-extensions</module>
         <module>extensions-contrib/spectator-histogram</module>
         <module>extensions-contrib/rabbit-stream-indexing-service</module>
+        <module>extensions-contrib/pulsar-indexing-service</module>
 
         <!-- distribution packaging -->
         <module>distribution</module>
