@@ -15,5 +15,6 @@ jobs:
         with:
           token: ${{ secrets.PERSONAL_TOKEN }}
           owner: apache
+          name: druid
           base: master
           head: master
