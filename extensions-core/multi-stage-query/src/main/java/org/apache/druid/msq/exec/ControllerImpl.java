@@ -563,11 +563,16 @@ public class ControllerImpl implements Controller
     this.netClient = new ExceptionWrappingWorkerClient(context.newWorkerClient());
     closer.register(netClient);
 
+    final QueryContext queryContext = querySpec.getQuery().context();
     final QueryDefinition queryDef = makeQueryDefinition(
         queryId(),
         makeQueryControllerToolKit(),
         querySpec,
         context.jsonMapper(),
+        MultiStageQueryContext.getTargetPartitionsPerWorkerWithDefault(
+            queryContext,
+            context.defaultTargetPartitionsPerWorker()
+        ),
         resultsContext
     );
 
@@ -612,7 +617,7 @@ public class ControllerImpl implements Controller
       );
     }
 
-    final long maxParseExceptions = MultiStageQueryContext.getMaxParseExceptions(querySpec.getQuery().context());
+    final long maxParseExceptions = MultiStageQueryContext.getMaxParseExceptions(queryContext);
     this.faultsExceededChecker = new FaultsExceededChecker(
         ImmutableMap.of(CannotParseExternalDataFault.CODE, maxParseExceptions)
     );
@@ -624,7 +629,7 @@ public class ControllerImpl implements Controller
                 stageDefinition.getId().getStageNumber(),
                 finalizeClusterStatisticsMergeMode(
                     stageDefinition,
-                    MultiStageQueryContext.getClusterStatisticsMergeMode(querySpec.getQuery().context())
+                    MultiStageQueryContext.getClusterStatisticsMergeMode(queryContext)
                 )
             )
     );
@@ -1603,9 +1608,10 @@ public class ControllerImpl implements Controller
     if (shardSpec != null) {
       if (Objects.equals(shardSpec.getType(), ShardSpec.Type.RANGE)) {
         List<String> partitionDimensions = ((DimensionRangeShardSpec) shardSpec).getDimensions();
+        // Effective maxRowsPerSegment is propagated as rowsPerSegment in MSQ
         partitionSpec = new DimensionRangePartitionsSpec(
-            tuningConfig.getRowsPerSegment(),
             null,
+            tuningConfig.getRowsPerSegment(),
             partitionDimensions,
             false
         );
@@ -1623,9 +1629,10 @@ public class ControllerImpl implements Controller
                 )));
       }
     } else if (clusterBy != null && !clusterBy.getColumns().isEmpty()) {
+      // Effective maxRowsPerSegment is propagated as rowsPerSegment in MSQ
       partitionSpec = new DimensionRangePartitionsSpec(
-          tuningConfig.getRowsPerSegment(),
           null,
+          tuningConfig.getRowsPerSegment(),
           clusterBy.getColumns()
                    .stream()
                    .map(KeyColumn::columnName).collect(Collectors.toList()),
@@ -1716,17 +1723,18 @@ public class ControllerImpl implements Controller
       @SuppressWarnings("rawtypes") final QueryKit toolKit,
       final MSQSpec querySpec,
       final ObjectMapper jsonMapper,
+      final int targetPartitionsPerWorker,
       final ResultsContext resultsContext
   )
   {
     final MSQTuningConfig tuningConfig = querySpec.getTuningConfig();
     final ColumnMappings columnMappings = querySpec.getColumnMappings();
     final Query<?> queryToPlan;
-    final ShuffleSpecFactory shuffleSpecFactory;
+    final ShuffleSpecFactory resultShuffleSpecFactory;
 
     if (MSQControllerTask.isIngestion(querySpec)) {
-      shuffleSpecFactory = querySpec.getDestination()
-                                    .getShuffleSpecFactory(tuningConfig.getRowsPerSegment());
+      resultShuffleSpecFactory = querySpec.getDestination()
+                                          .getShuffleSpecFactory(tuningConfig.getRowsPerSegment());
 
       if (!columnMappings.hasUniqueOutputColumnNames()) {
         // We do not expect to hit this case in production, because the SQL validator checks that column names
@@ -1750,7 +1758,7 @@ public class ControllerImpl implements Controller
         queryToPlan = querySpec.getQuery();
       }
     } else {
-      shuffleSpecFactory =
+      resultShuffleSpecFactory =
           querySpec.getDestination()
                    .getShuffleSpecFactory(MultiStageQueryContext.getRowsPerPage(querySpec.getQuery().context()));
       queryToPlan = querySpec.getQuery();
@@ -1763,8 +1771,9 @@ public class ControllerImpl implements Controller
           queryId,
           queryToPlan,
           toolKit,
-          shuffleSpecFactory,
+          resultShuffleSpecFactory,
           tuningConfig.getMaxNumWorkers(),
+          targetPartitionsPerWorker,
           0
       );
     }
